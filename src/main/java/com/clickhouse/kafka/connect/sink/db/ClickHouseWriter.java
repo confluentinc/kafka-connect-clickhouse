@@ -320,7 +320,7 @@ public class ClickHouseWriter implements DBWriter {
                         ZonedDateTime zonedDateTime = ZonedDateTime.parse((String) value.getObject());
                         BinaryStreamUtils.writeUnsignedInt32(stream, zonedDateTime.toInstant().getEpochSecond());
                     } catch (Exception e) {
-                        LOGGER.error("Error parsing date time string: {}", value.getObject());
+                        LOGGER.error("Error parsing DateTime value for column: {}, fieldType: {}", columnName, value.getFieldType());
                         unsupported = true;
                     }
                 } else {
@@ -373,7 +373,7 @@ public class ClickHouseWriter implements DBWriter {
                             BinaryStreamUtils.writeInt64(stream, seconds);
                         }
                     } catch (Exception e) {
-                        LOGGER.error("Error parsing date time string: {}, exception: {}", value.getObject(), e.getMessage());
+                        LOGGER.error("Error parsing DateTime64 value for column: {}, fieldType: {}, exception: {}", columnName, value.getFieldType(), e.getMessage());
                         unsupported = true;
                     }
                 } else {
