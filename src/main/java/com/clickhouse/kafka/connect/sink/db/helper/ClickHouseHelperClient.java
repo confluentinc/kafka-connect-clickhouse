@@ -62,18 +62,10 @@ public class ClickHouseHelperClient {
     private boolean useClientV2 = false;
 
     public ClickHouseHelperClient(ClickHouseClientBuilder builder) {
-        LOGGER.info("[ClickHouseHelperClient] Builder hostname: {}", builder.hostname);
-        LOGGER.info("[ClickHouseHelperClient] Builder port: {}", builder.port);
-        LOGGER.info("[ClickHouseHelperClient] Builder username: {}", builder.username);
-        LOGGER.info("[ClickHouseHelperClient] Builder database: {}", builder.database);
-        LOGGER.info("[ClickHouseHelperClient] Builder sslEnabled: {}", builder.sslEnabled);
-        LOGGER.info("[ClickHouseHelperClient] Builder jdbcConnectionProperties: {}", builder.jdbcConnectionProperties);
-        LOGGER.info("[ClickHouseHelperClient] Builder timeout: {}", builder.timeout);
-        LOGGER.info("[ClickHouseHelperClient] Builder retry: {}", builder.retry);
-        LOGGER.info("[ClickHouseHelperClient] Builder proxyType: {}", builder.proxyType);
-        LOGGER.info("[ClickHouseHelperClient] Builder proxyHost: {}", builder.proxyHost);
-        LOGGER.info("[ClickHouseHelperClient] Builder proxyPort: {}", builder.proxyPort);
-        LOGGER.info("[ClickHouseHelperClient] Builder useClientV2: {}", builder.useClientV2);
+        LOGGER.debug("Creating ClickHouseHelperClient with config: hostname={}, port={}, username={}, database={}, sslEnabled={}, jdbcConnectionProperties={}, timeout={}, retry={}, proxyType={}, proxyHost={}, proxyPort={}, useClientV2={}",
+                builder.hostname, builder.port, builder.username, builder.database, builder.sslEnabled,
+                builder.jdbcConnectionProperties, builder.timeout, builder.retry, builder.proxyType,
+                builder.proxyHost, builder.proxyPort, builder.useClientV2);
         this.hostname = builder.hostname;
         this.port = builder.port;
         this.username = builder.username;
@@ -121,12 +113,8 @@ public class ClickHouseHelperClient {
                 tmpJdbcConnectionProperties
         );
 
-        LOGGER.info("[createClientV1] ClickHouse URL: {}", url);
-        LOGGER.info("[createClientV1] Hostname: {}", hostname);
-        LOGGER.info("[createClientV1] Port: {}", port);
-        LOGGER.info("[createClientV1] Database: {}", database);
-        LOGGER.info("[createClientV1] SSL Enabled: {}", sslEnabled);
-        LOGGER.info("[createClientV1] JDBC Connection Properties: {}", tmpJdbcConnectionProperties);
+        LOGGER.debug("createClientV1: url={}, hostname={}, port={}, database={}, sslEnabled={}, jdbcConnectionProperties={}",
+                url, hostname, port, database, sslEnabled, tmpJdbcConnectionProperties);
 
         if (username != null && password != null) {
             LOGGER.debug(String.format("Adding username [%s]", username));
@@ -158,12 +146,8 @@ public class ClickHouseHelperClient {
                 tmpJdbcConnectionProperties
         );
 
-        LOGGER.info("[createClientV2] ClickHouse URL: {}", url);
-        LOGGER.info("[createClientV2] Hostname: {}", hostname);
-        LOGGER.info("[createClientV2] Port: {}", port);
-        LOGGER.info("[createClientV2] Database: {}", database);
-        LOGGER.info("[createClientV2] SSL Enabled: {}", sslEnabled);
-        LOGGER.info("[createClientV2] JDBC Connection Properties: {}", tmpJdbcConnectionProperties);
+        LOGGER.debug("createClientV2: url={}, hostname={}, port={}, database={}, sslEnabled={}, jdbcConnectionProperties={}",
+                url, hostname, port, database, sslEnabled, tmpJdbcConnectionProperties);
 
         Client.Builder clientBuilder = new Client.Builder()
                 .addEndpoint(url)
@@ -296,7 +280,7 @@ public class ClickHouseHelperClient {
         if (clickHouseFormat != null)
             settings.setFormat(clickHouseFormat);
         while (retryCount < retry) {
-            System.out.println("query " + query + " retry " + retryCount + " out of " + retry);
+            LOGGER.debug("queryV2: query={}, retry={} out of {}", query, retryCount, retry);
             CompletableFuture<Records> futureRecords = client.queryRecords(query, settings);
             try {
                 Records records = futureRecords.get();
@@ -442,7 +426,7 @@ public class ClickHouseHelperClient {
                     table.addColumn(column);                }
             }
         } catch (Exception e) {
-            System.out.println(e);
+            LOGGER.error("Exception in describeTableV2 for table {}.{}", database, tableName, e);
             return null;
         }
         return table;
@@ -496,13 +480,10 @@ public class ClickHouseHelperClient {
             this.proxyType = proxyType;
             this.proxyHost = proxyHost;
             this.proxyPort = proxyPort;
-            System.out.println("[Builder] hostname=" + hostname + ", port=" + port + ", proxyType=" + proxyType + ", proxyHost=" + proxyHost + ", proxyPort=" + proxyPort);
         }
-
 
         public ClickHouseClientBuilder setUsername(String username) {
             this.username = username;
-            LOGGER.info("[Builder] setUsername: {}", username);
             return this;
         }
 
@@ -513,36 +494,31 @@ public class ClickHouseHelperClient {
 
         public ClickHouseClientBuilder setDatabase(String database) {
             this.database = database;
-            LOGGER.info("[Builder] setDatabase: {}", database);
             return this;
         }
 
         public ClickHouseClientBuilder sslEnable(boolean sslEnabled) {
             this.sslEnabled = sslEnabled;
-            LOGGER.info("[Builder] sslEnable: {}", sslEnabled);
             return this;
         }
 
         public ClickHouseClientBuilder setJdbcConnectionProperties(String jdbcConnectionProperties) {
             this.jdbcConnectionProperties = jdbcConnectionProperties;
-            LOGGER.info("[Builder] setJdbcConnectionProperties: {}", jdbcConnectionProperties);
             return this;
         }
 
         public ClickHouseClientBuilder setTimeout(int timeout) {
             this.timeout = timeout;
-            LOGGER.info("[Builder] setTimeout: {}", timeout);
             return this;
         }
 
         public ClickHouseClientBuilder setRetry(int retry) {
             this.retry = retry;
-            LOGGER.info("[Builder] setRetry: {}", retry);
             return this;
         }
+
         public ClickHouseClientBuilder useClientV2(boolean useClientV2) {
             this.useClientV2 = useClientV2;
-            LOGGER.info("[Builder] useClientV2: {}", useClientV2);
             return this;
         }
         public ClickHouseHelperClient build(){
