@@ -23,23 +23,27 @@ import java.util.Properties;
 
 public class Version {
     private static final Logger log = LoggerFactory.getLogger(Version.class);
-    private static String version = "unknown";
+    private static final String VERSION;
 
     private static final String VERSION_FILE = "/clickhouse-kafka-connect-version.properties";
 
     static {
+        String v = "unknown";
         try {
             Properties props = new Properties();
             try (InputStream versionFileStream = Version.class.getResourceAsStream(VERSION_FILE)) {
                 props.load(versionFileStream);
-                version = props.getProperty("version", version).trim();
+                v = props.getProperty("version", v).trim();
             }
         } catch (Exception e) {
             log.warn("Error while loading version:", e);
         }
+        VERSION = v;
     }
 
+    private Version() {}
+
     public static String getVersion() {
-        return version;
+        return VERSION;
     }
 }
