@@ -1,78 +1,71 @@
 package com.clickhouse.kafka.connect.sink;
 
-import com.clickhouse.client.config.ClickHouseClientOption;
 import com.clickhouse.kafka.connect.sink.data.Record;
 import com.clickhouse.kafka.connect.sink.db.ClickHouseWriter;
 import com.clickhouse.kafka.connect.sink.db.DBWriter;
-import com.clickhouse.kafka.connect.sink.db.TableMappingRefresher;
 import com.clickhouse.kafka.connect.sink.dlq.ErrorReporter;
 import com.clickhouse.kafka.connect.sink.processing.Processing;
 import com.clickhouse.kafka.connect.sink.state.StateProvider;
 import com.clickhouse.kafka.connect.sink.state.provider.InMemoryState;
 import com.clickhouse.kafka.connect.sink.state.provider.KeeperStateProvider;
+import com.clickhouse.kafka.connect.util.Utils;
 import com.clickhouse.kafka.connect.util.jmx.ExecutionTimer;
-import com.clickhouse.kafka.connect.util.jmx.MBeanServerUtils;
 import com.clickhouse.kafka.connect.util.jmx.SinkTaskStatistics;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.Timer;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
-public class ProxySinkTask {
+public final class ProxySinkTask {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ProxySinkTask.class);
     private static final AtomicInteger NEXT_ID = new AtomicInteger();
-    private Processing processing = null;
-    private StateProvider stateProvider = null;
-    private DBWriter dbWriter = null;
-    private ClickHouseSinkConfig clickHouseSinkConfig = null;
-
+    private final Processing processing;
+    private final StateProvider stateProvider;
+    private final DBWriter dbWriter;
+    private final ClickHouseSinkConfig clickHouseSinkConfig;
 
     private final SinkTaskStatistics statistics;
-    private int id = NEXT_ID.getAndAdd(1);
+    private final int id = NEXT_ID.getAndAdd(1);
+    private final ErrorReporter errorReporter;
 
     public ProxySinkTask(final ClickHouseSinkConfig clickHouseSinkConfig, final ErrorReporter errorReporter) {
         this.clickHouseSinkConfig = clickHouseSinkConfig;
+        this.errorReporter = errorReporter;
         LOGGER.info("Enable ExactlyOnce? {}", clickHouseSinkConfig.isExactlyOnce());
         if ( clickHouseSinkConfig.isExactlyOnce() ) {
             this.stateProvider = new KeeperStateProvider(clickHouseSinkConfig);
         } else {
             this.stateProvider = new InMemoryState();
         }
+        this.statistics = new SinkTaskStatistics(id);
+        this.dbWriter = new ClickHouseWriter(this.statistics);
+        processing = new Processing(stateProvider, dbWriter, errorReporter, clickHouseSinkConfig, statistics);
+    }
 
-        ClickHouseWriter chWriter = new ClickHouseWriter();
-        this.dbWriter = chWriter;
-
-        // Add table mapping refresher
-        if (clickHouseSinkConfig.getTableRefreshInterval() > 0) {
-            TableMappingRefresher tableMappingRefresher = new TableMappingRefresher(clickHouseSinkConfig.getDatabase(), chWriter);
-            Timer tableRefreshTimer = new Timer();
-            tableRefreshTimer.schedule(tableMappingRefresher, clickHouseSinkConfig.getTableRefreshInterval(), clickHouseSinkConfig.getTableRefreshInterval());
-        }
+    public void start() {
+        this.statistics.registerMBean();
 
         // Add dead letter queue
         boolean isStarted = dbWriter.start(clickHouseSinkConfig);
-        if (!isStarted)
+        if (!isStarted) {
             throw new RuntimeException("Connection to ClickHouse is not active.");
-        processing = new Processing(stateProvider, dbWriter, errorReporter, clickHouseSinkConfig);
-
-        this.statistics = MBeanServerUtils.registerMBean(new SinkTaskStatistics(), getMBeanNAme());
-    }
-
-    private String getMBeanNAme() {
-        return String.format("com.clickhouse:type=ClickHouseKafkaConnector,name=SinkTask%d,version=%s", id, ClickHouseClientOption.class.getPackage().getImplementationVersion());
+        }
     }
 
     public void stop() {
-        MBeanServerUtils.unregisterMBean(getMBeanNAme());
+        dbWriter.stop();
+        statistics.unregisterMBean();
     }
 
     public void put(final Collection<SinkRecord> records) throws IOException, ExecutionException, InterruptedException {
@@ -81,8 +74,8 @@ public class ProxySinkTask {
             return;
         }
         // Group by topic & partition
+        statistics.receivedRecords(records);
         ExecutionTimer taskTime = ExecutionTimer.start();
-        statistics.receivedRecords(records.size());
         LOGGER.trace(String.format("Got %d records from put API.", records.size()));
         ExecutionTimer processingTime = ExecutionTimer.start();
 
@@ -96,11 +89,35 @@ public class ProxySinkTask {
 
         statistics.recordProcessingTime(processingTime);
         // TODO - Multi process???
+        List<Utils.FailedRecords> failedMessages = new ArrayList<>(dataRecords.size());
         for (String topicAndPartition : dataRecords.keySet()) {
-            // Running on etch topic & partition
+            // Running on each topic & partition
             List<Record> rec = dataRecords.get(topicAndPartition);
-            processing.doLogic(rec);
+            try {
+                processing.doLogic(rec);
+            } catch (Exception e) {
+                boolean errorTolerance = clickHouseSinkConfig.isErrorsTolerance();
+                Utils.handleException(e, errorTolerance, records); // This will throw RetriableException and failed records will be retried. No need to continue with the next topic & partition
+                if (errorTolerance) {
+                    failedMessages.add(new Utils.FailedRecords(rec, e));
+                    statistics.sentToDLQ(rec.size());
+                }
+            }
         }
         statistics.taskProcessingTime(taskTime);
+        Utils.sendTODLQ(failedMessages, errorReporter);
+    }
+
+    public int getId() {
+        return id;
+    }
+
+
+    public void onPartitionRemoved(Collection<TopicPartition> partitions) {
+        stateProvider.onPartitionRemoved(partitions);
+    }
+
+    public Map<TopicPartition, OffsetAndMetadata> getInsertedOffsetsSnapshot() {
+        return stateProvider.getLastInsertedOffsetsSnapshot();
     }
 }
