@@ -8,9 +8,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -26,6 +29,7 @@ public class Table {
 
     private final List<Column> rootColumnsList;
     private final Map<String, Column> rootColumnsMap;
+    @Getter
     private final List<Column> allColumnsList;
     private final Map<String, Column> allColumnsMap;
 
@@ -78,11 +82,21 @@ public class Table {
         }
     }
 
+    public Set<String> getMissingColumns(Collection<String> fieldNames) {
+        Set<String> missing = new LinkedHashSet<>();
+        for (String fieldName : fieldNames) {
+            if (!rootColumnsMap.containsKey(fieldName)) {
+                missing.add(fieldName);
+            }
+        }
+        return missing;
+    }
+
     private void handleNonRoot(Column column) {
         String parentName = column.getName().substring(0, column.getName().lastIndexOf("."));
         Column parent = allColumnsMap.getOrDefault(parentName, null);
         if (parent == null) {
-            LOGGER.error("Got non-root column, but its parent was not found to be updated. {}", column);
+            LOGGER.warn("Got non-root column, but its parent was not found to be updated. {}", column);
             return;
         }
 
@@ -95,7 +109,8 @@ public class Table {
                 // Variants are handled fully in the Column class because its types are always primitive. Let's ignore them here.
                 return;
             case ARRAY:
-                if (SIZE_FIELD_MATCHER.test(child.getName()))
+                final String childName = child.getName();
+                if (SIZE_FIELD_MATCHER.test(childName) || childName.endsWith(".null"))
                     return;
 
                 Column parentArrayType = parent.getArrayType();
@@ -114,7 +129,8 @@ public class Table {
                     case VARIANT:
                         return;
                     default:
-                        LOGGER.error("Unhandled complex type '{}' as a child of an array", parentArrayType.getType());
+                        LOGGER.warn("Unhandled complex type '{}' as a child of an array or unexpected subcolumn (parent name: '{}', child name: '{}').",
+                                parentArrayType.getType(), parent.getName(), child.getName() );
                         return;
                 }
             case MAP:
@@ -175,7 +191,8 @@ public class Table {
                 if (child.getName().endsWith(".null")) {
                     LOGGER.debug("Ignoring complex column: {}", child);
                 } else {
-                    LOGGER.warn("Unsupported complex parent type: {}", parent.getType());
+                    LOGGER.warn("Unsupported complex parent type: {} (parent name: '{}')",
+                            parent.getType(), parent.getName());
                 }
         }
     }

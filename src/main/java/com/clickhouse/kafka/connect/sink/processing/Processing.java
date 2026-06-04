@@ -7,11 +7,11 @@ import com.clickhouse.kafka.connect.sink.dlq.DuplicateException;
 import com.clickhouse.kafka.connect.sink.dlq.ErrorReporter;
 import com.clickhouse.kafka.connect.sink.kafka.RangeContainer;
 import com.clickhouse.kafka.connect.sink.kafka.RangeState;
-import com.clickhouse.kafka.connect.sink.state.State;
 import com.clickhouse.kafka.connect.sink.state.StateProvider;
 import com.clickhouse.kafka.connect.sink.state.StateRecord;
 import com.clickhouse.kafka.connect.util.QueryIdentifier;
 import com.clickhouse.kafka.connect.util.Utils;
+import com.clickhouse.kafka.connect.util.jmx.SinkTaskStatistics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,21 +20,27 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import static com.clickhouse.kafka.connect.sink.state.State.AFTER_PROCESSING;
+import static com.clickhouse.kafka.connect.sink.state.State.BEFORE_PROCESSING;
+
 public class Processing {
     private static final Logger LOGGER = LoggerFactory.getLogger(Processing.class);
     private StateProvider stateProvider = null;
     private DBWriter dbWriter = null;
     private ClickHouseSinkConfig clickHouseSinkConfig;
-
+    private SinkTaskStatistics statistics;
 
     private ErrorReporter errorReporter = null;
 
-    public Processing(StateProvider stateProvider, DBWriter dbWriter, ErrorReporter errorReporter, ClickHouseSinkConfig clickHouseSinkConfig) {
+    public Processing(StateProvider stateProvider, DBWriter dbWriter, ErrorReporter errorReporter,
+                      ClickHouseSinkConfig clickHouseSinkConfig, SinkTaskStatistics statistics) {
         this.stateProvider = stateProvider;
         this.dbWriter = dbWriter;
         this.errorReporter = errorReporter;
         this.clickHouseSinkConfig = clickHouseSinkConfig;
+        this.statistics = statistics;
     }
+
     /**
      * the logic is only for topic partition scoop
      *
@@ -46,14 +52,23 @@ public class Processing {
             LOGGER.trace("doInsert - No records to insert.");
             return;
         }
-        QueryIdentifier queryId = new QueryIdentifier(records.get(0).getRecordOffsetContainer().getTopic(), records.get(0).getRecordOffsetContainer().getPartition(),
+
+        final Record firstRecord = records.get(0);
+        long eventReceiveLag = 0;
+        if (firstRecord.getSinkRecord().timestamp() != null) {
+            eventReceiveLag = System.currentTimeMillis() - firstRecord.getSinkRecord().timestamp();
+        }
+        final String topic = firstRecord.getRecordOffsetContainer().getTopic();
+        QueryIdentifier queryId = new QueryIdentifier(topic, records.get(0).getRecordOffsetContainer().getPartition(),
                 rangeContainer.getMinOffset(), rangeContainer.getMaxOffset(),
                 UUID.randomUUID().toString());
 
         try {
             LOGGER.debug("doInsert - Records: [{}] - {}", records.size(), queryId);
             dbWriter.doInsert(records, queryId, errorReporter);
+            statistics.recordTopicStats(records.size(), queryId.getTopic(), eventReceiveLag);
         } catch (Exception e) {
+            statistics.recordTopicStatsOnFailure(records.size(), queryId.getTopic(), eventReceiveLag);
             throw new RuntimeException(queryId.toString(), e);//This way the queryId will propagate
         }
     }
@@ -63,12 +78,21 @@ public class Processing {
             LOGGER.trace("doInsert - No records to insert.");
             return;
         }
-        QueryIdentifier queryId = new QueryIdentifier(records.get(0).getRecordOffsetContainer().getTopic(), UUID.randomUUID().toString());
+
+        final Record firstRecord = records.get(0);
+        long eventReceiveLag = 0;
+        if (firstRecord.getSinkRecord().timestamp() != null) {
+            eventReceiveLag = System.currentTimeMillis() - firstRecord.getSinkRecord().timestamp();
+        }
+        final String topic = firstRecord.getRecordOffsetContainer().getTopic();
+        QueryIdentifier queryId = new QueryIdentifier(topic, UUID.randomUUID().toString());
 
         try {
             LOGGER.info("doInsert - Records: [{}] - {}", records.size(), queryId);
             dbWriter.doInsert(records, queryId, errorReporter);
+            statistics.recordTopicStats(records.size(), topic, eventReceiveLag);
         } catch (Exception e) {
+            statistics.recordTopicStatsOnFailure(records.size(), topic, eventReceiveLag);
             throw new RuntimeException(queryId.toString(), e);//This way the queryId will propagate
         }
     }
@@ -110,12 +134,14 @@ public class Processing {
 
         String database = record.getDatabase();
         String topic = record.getRecordOffsetContainer().getTopic();
+        String originalTopic = record.getSinkRecord().topic();
 
         if (this.clickHouseSinkConfig != null && clickHouseSinkConfig.isEnableDbTopicSplit()) {
             topic = database + clickHouseSinkConfig.getDbTopicSplitChar() + topic;
         }
 
         if (!clickHouseSinkConfig.isExactlyOnce() && clickHouseSinkConfig.isIgnorePartitionsWhenBatching()) {
+            // link to com.clickhouse.kafka.connect.sink.ClickHouseSinkTask.preCommit
             LOGGER.debug("doLogic - Topic: [{}], Records: [{}]", topic, records.size());
             doInsert(records);
             return;
@@ -135,35 +161,36 @@ public class Processing {
 
         // first, let get last topic partition range & state
         StateRecord stateRecord = stateProvider.getStateRecord(topic, partition);
+        stateRecord.setOriginalTopic(originalTopic); // restore original topic
         switch (stateRecord.getState()) {
             case NONE:
                 // this is the first time we see this topic and partition; or we had a previous failure setting the state.
                 LOGGER.debug("NONE - First time seeing {}", stateRecord);
-                stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), State.BEFORE_PROCESSING));
+                stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), BEFORE_PROCESSING, originalTopic));
                 doInsert(records, rangeContainer);
-                stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), State.AFTER_PROCESSING));
+                stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), AFTER_PROCESSING, originalTopic));
                 break;
             case BEFORE_PROCESSING:
                 int bpBeforeDrop = records.size();
                 trimmedRecords = dropRecords(stateRecord.getMinOffset(), records);
                 int bpAfterDrop = trimmedRecords.size();
-                LOGGER.debug("BEFORE_PROCESSING - Before drop total {} After drop total {} state {}", bpBeforeDrop, bpAfterDrop, stateRecord.getOverLappingState(rangeContainer));
+                LOGGER.debug("BEFORE_PROCESSING - Before drop total {} After drop total {} state {}", bpBeforeDrop, bpAfterDrop, stateRecord.getOverLappingState(rangeContainer, BEFORE_PROCESSING));
                 // Here there are several options
-                switch (stateRecord.getOverLappingState(rangeContainer)) {
+                switch (stateRecord.getOverLappingState(rangeContainer, BEFORE_PROCESSING)) {
                     case ZERO: // Reset if we're at a 0 state
                         LOGGER.warn(String.format("The topic seems to be deleted. Resetting state for topic [%s] partition [%s].", topic, partition));
-                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), State.BEFORE_PROCESSING));//RESET
+                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), BEFORE_PROCESSING, originalTopic));//RESET
                         doInsert(records, rangeContainer);
-                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), State.AFTER_PROCESSING));
+                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), AFTER_PROCESSING, originalTopic));
                         break;
                     case SAME: // Dedupe in clickhouse will fix it
                     case NEW:
                         doInsert(trimmedRecords, rangeContainer);
-                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), State.AFTER_PROCESSING));
+                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), AFTER_PROCESSING, originalTopic));
                         break;
                     case CONTAINS: // The state contains the given records
                         // Do nothing - write to dead letter queue
-                        throw new RuntimeException(String.format("State CONTAINS given [%s] records for topic: [%s], partition: [%s], minOffset: [%s], maxOffset: [%s]",
+                        throw new RuntimeException(String.format("BEFORE_PROCESSING: State CONTAINS given [%s] records for topic: [%s], partition: [%s], minOffset: [%s], maxOffset: [%s]",
                                 records.size(), topic, partition, rangeContainer.getMinOffset(), rangeContainer.getMaxOffset()));
                     case OVER_LAPPING:
                         // spit it to 2 inserts
@@ -171,9 +198,9 @@ public class Processing {
                         List<Record> leftRecords = rightAndLeft.get(0);
                         RangeContainer leftRangeContainer = extractRange(leftRecords, topic, partition);
                         // (Re-)Insert the first chunk only if the boundaries are the same
-                        if (stateRecord.getOverLappingState(leftRangeContainer) == RangeState.SAME) {
+                        if (stateRecord.getOverLappingState(leftRangeContainer, BEFORE_PROCESSING) == RangeState.SAME) {
                             doInsert(leftRecords, leftRangeContainer);
-                            stateProvider.setStateRecord(new StateRecord(topic, partition, leftRangeContainer.getMaxOffset(), leftRangeContainer.getMinOffset(), State.AFTER_PROCESSING));
+                            stateProvider.setStateRecord(new StateRecord(topic, partition, leftRangeContainer.getMaxOffset(), leftRangeContainer.getMinOffset(), AFTER_PROCESSING, originalTopic));
                         } else {
                             LOGGER.warn(String.format("Records seemingly missing compared to prior batch for topic [%s] partition [%s].", topic, partition));
                             // Do nothing - write to dead letter queue
@@ -183,12 +210,12 @@ public class Processing {
                         }
                         List<Record> rightRecords = rightAndLeft.get(1);
                         RangeContainer rightRangeContainer = extractRange(rightRecords, topic, partition);
-                        stateProvider.setStateRecord(new StateRecord(topic, partition, rightRangeContainer.getMaxOffset(), rightRangeContainer.getMinOffset(), State.BEFORE_PROCESSING));
+                        stateProvider.setStateRecord(new StateRecord(topic, partition, rightRangeContainer.getMaxOffset(), rightRangeContainer.getMinOffset(), BEFORE_PROCESSING, originalTopic));
                         doInsert(rightRecords, rightRangeContainer);
-                        stateProvider.setStateRecord(new StateRecord(topic, partition, rightRangeContainer.getMaxOffset(), rightRangeContainer.getMinOffset(), State.AFTER_PROCESSING));
+                        stateProvider.setStateRecord(new StateRecord(topic, partition, rightRangeContainer.getMaxOffset(), rightRangeContainer.getMinOffset(), AFTER_PROCESSING, originalTopic));
                         break;
                     default: //case ERROR:
-                        throw new RuntimeException(String.format("ERROR State given [%s] records for topic: [%s], partition: [%s], minOffset: [%s], maxOffset: [%s], expectedMinOffset: [%s], expectedMaxOffset: [%s]",
+                        throw new RuntimeException(String.format("BEFORE_PROCESSING: ERROR State given [%s] records for topic: [%s], partition: [%s], minOffset: [%s], maxOffset: [%s], expectedMinOffset: [%s], expectedMaxOffset: [%s]",
                                 records.size(), topic, partition, rangeContainer.getMinOffset(), rangeContainer.getMaxOffset(), stateRecord.getMinOffset(), stateRecord.getMaxOffset()));
                 }
                 break;
@@ -196,45 +223,45 @@ public class Processing {
                 int apBeforeDrop = records.size();
                 trimmedRecords = dropRecords(stateRecord.getMinOffset(), records);
                 int apAfterDrop = trimmedRecords.size();
-                LOGGER.debug("AFTER_PROCESSING - Before drop total {} After drop total {} state {}", apBeforeDrop, apAfterDrop, stateRecord.getOverLappingState(rangeContainer));
-                switch (stateRecord.getOverLappingState(rangeContainer)) {
+                LOGGER.debug("AFTER_PROCESSING - Before drop total {} After drop total {} state {}", apBeforeDrop, apAfterDrop, stateRecord.getOverLappingState(rangeContainer, AFTER_PROCESSING));
+                switch (stateRecord.getOverLappingState(rangeContainer, AFTER_PROCESSING)) {
                     case SAME:
                     case CONTAINS:
+                        stateProvider.onStateUpdate(stateRecord);
                         break;
                     case ZERO:
                         LOGGER.warn(String.format("It seems you deleted the topic - resetting state for topic [%s] partition [%s].", topic, partition));
-                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), State.BEFORE_PROCESSING));
+                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), BEFORE_PROCESSING, originalTopic));
                         doInsert(records, rangeContainer);
-                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), State.AFTER_PROCESSING));
+                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), AFTER_PROCESSING, originalTopic));
                         break;
                     case NEW:
-                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), State.BEFORE_PROCESSING));
+                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), BEFORE_PROCESSING, originalTopic));
                         doInsert(trimmedRecords, rangeContainer);
-                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), State.AFTER_PROCESSING));
+                        stateProvider.setStateRecord(new StateRecord(topic, partition, rangeContainer.getMaxOffset(), rangeContainer.getMinOffset(), AFTER_PROCESSING, originalTopic));
                         break;
                     case OVER_LAPPING:
                         // spit it to 2 inserts we will ignore one and insert the other
                         List<List<Record>> rightAndLeft = splitRecordsByOffset(trimmedRecords, stateRecord.getMaxOffset(), stateRecord.getMinOffset());
                         List<Record> rightRecords = rightAndLeft.get(1);
                         RangeContainer rightRangeContainer = extractRange(rightRecords, topic, partition);
-                        stateProvider.setStateRecord(new StateRecord(topic, partition, rightRangeContainer.getMaxOffset(), rightRangeContainer.getMinOffset(), State.BEFORE_PROCESSING));
+                        stateProvider.setStateRecord(new StateRecord(topic, partition, rightRangeContainer.getMaxOffset(), rightRangeContainer.getMinOffset(), BEFORE_PROCESSING, originalTopic));
                         doInsert(rightRecords, rightRangeContainer);
-                        stateProvider.setStateRecord(new StateRecord(topic, partition, rightRangeContainer.getMaxOffset(), rightRangeContainer.getMinOffset(), State.AFTER_PROCESSING));
+                        stateProvider.setStateRecord(new StateRecord(topic, partition, rightRangeContainer.getMaxOffset(), rightRangeContainer.getMinOffset(), AFTER_PROCESSING, originalTopic));
                         break;
                     case PREVIOUS:
                         if (clickHouseSinkConfig.isTolerateStateMismatch()) {
-                            LOGGER.warn("State MISMATCH as batch already processed - skipping [{}] records for topic: [{}], partition: [{}], minOffset: [{}], maxOffset: [{}], storedMinOffset: [{}], storedMaxOffset: [{}]",
+                            LOGGER.warn("AFTER_PROCESSING: State MISMATCH as batch already processed - skipping [{}] records for topic: [{}], partition: [{}], minOffset: [{}], maxOffset: [{}], storedMinOffset: [{}], storedMaxOffset: [{}]",
                                     records.size(), topic, partition, rangeContainer.getMinOffset(), rangeContainer.getMaxOffset(), stateRecord.getMinOffset(), stateRecord.getMaxOffset());
                         } else {
-                            throw new RuntimeException(String.format("State MISMATCH as batch already processed - skipping [%s] records for topic: [%s], partition: [%s], minOffset: [%s], maxOffset: [%s], storedMinOffset: [%s], storedMaxOffset: [%s]",
+                            throw new RuntimeException(String.format("AFTER_PROCESSING: State MISMATCH as batch already processed - skipping [%s] records for topic: [%s], partition: [%s], minOffset: [%s], maxOffset: [%s], storedMinOffset: [%s], storedMaxOffset: [%s]",
                                     records.size(), topic, partition, rangeContainer.getMinOffset(), rangeContainer.getMaxOffset(), stateRecord.getMinOffset(), stateRecord.getMaxOffset()));
                         }
                         break;
                     default: //case ERROR:
-                        throw new RuntimeException(String.format("ERROR State given [%s] records for topic: [%s], partition: [%s], minOffset: [%s], maxOffset: [%s], expectedMinOffset: [%s], expectedMaxOffset: [%s]",
+                        throw new RuntimeException(String.format("AFTER_PROCESSING: ERROR State given [%s] records for topic: [%s], partition: [%s], minOffset: [%s], maxOffset: [%s], expectedMinOffset: [%s], expectedMaxOffset: [%s]",
                                 records.size(), topic, partition, rangeContainer.getMinOffset(), rangeContainer.getMaxOffset(), stateRecord.getMinOffset(), stateRecord.getMaxOffset()));
                 }
         }
     }
-
 }

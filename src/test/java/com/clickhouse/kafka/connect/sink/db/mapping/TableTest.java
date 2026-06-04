@@ -1,8 +1,10 @@
 package com.clickhouse.kafka.connect.sink.db.mapping;
 
+import com.clickhouse.kafka.connect.ClickHouseSinkConnector;
 import com.clickhouse.kafka.connect.sink.ClickHouseBase;
 import com.clickhouse.kafka.connect.sink.db.helper.ClickHouseHelperClient;
 import com.clickhouse.kafka.connect.sink.helper.ClickHouseTestHelpers;
+import com.clickhouse.kafka.connect.sink.helper.CreateTableStatement;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -34,17 +36,41 @@ class TableTest extends ClickHouseBase {
 
     @Test
     public void extractNullables() {
-        Map<String, String> props = createProps();
-        ClickHouseHelperClient chc = createClient(props);
+        Map<String, String> props = getBaseProps();
+        ClickHouseHelperClient chc = ClickHouseTestHelpers.createClient(props);
 
         String tableName = createTopicName("extract-table-test");
         ClickHouseTestHelpers.dropTable(chc, tableName);
-        ClickHouseTestHelpers.createTable(chc, tableName, "CREATE TABLE `%s` (`off16` Int16, date_number Nullable(Date)) Engine = MergeTree ORDER BY off16");
+        new CreateTableStatement()
+                .tableName(tableName)
+                .column("off16", "Int16")
+                .column("date_number", "Nullable(Date)")
+                .engine("MergeTree").orderByColumn("off16").execute(chc);
 
         Table table = chc.describeTable(chc.getDatabase(), tableName);
         assertNotNull(table);
         assertEquals(table.getRootColumnsList().size(), 2);
         assertEquals(table.getAllColumnsList().size(), 3);
+        ClickHouseTestHelpers.dropTable(chc, tableName);
+    }
+
+    @Test
+    public void extractCommentV1() {
+        Map<String, String> props = getBaseProps();
+        props.put(ClickHouseSinkConnector.CLIENT_VERSION, "V1");
+        ClickHouseHelperClient chc = ClickHouseTestHelpers.createClient(props);
+
+        String tableName = createTopicName("extract-table-test");
+        ClickHouseTestHelpers.dropTable(chc, tableName);
+        new CreateTableStatement()
+                .tableName(tableName)
+                .column("c", "String COMMENT '\\\\'")
+                .column("d", "String COMMENT '\\n'")
+                .engine("MergeTree()").orderByColumn("tuple()").execute(chc);
+
+        Table table = chc.describeTable(chc.getDatabase(), tableName);
+        assertNotNull(table);
+        assertEquals(table.getRootColumnsList().size(), 2);
         ClickHouseTestHelpers.dropTable(chc, tableName);
     }
 

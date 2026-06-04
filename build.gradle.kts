@@ -32,9 +32,10 @@ plugins {
     `maven-publish`
     signing
    // checkstyle
-    id("com.github.gmazzo.buildconfig") version "5.5.0"
-    id("com.diffplug.spotless") version "6.25.0"
+    id("com.diffplug.spotless") version "7.0.2"
     id("com.github.johnrengelman.shadow") version "7.1.2"
+    id("com.google.protobuf") version "0.9.5"
+    id("java-test-fixtures")
 }
 
 group = "com.clickhouse.kafka"
@@ -43,13 +44,18 @@ description = "The official ClickHouse Apache Kafka Connect Connector."
 
 repositories {
     mavenCentral()
+    mavenLocal()
     maven("https://packages.confluent.io/maven/")
     maven("https://jitpack.io")
 }
 
 extra.apply {
-    set("clickHouseDriverVersion", "0.8.0")
+    set("clickHouseDriverVersion", "0.9.5")
     set("kafkaVersion", "2.7.0")
+    set("gson", "2.13.1")
+    set("jackson", "2.21.2")
+    set("jackson-annotations", "2.21")
+    set("httpclient", "5.5.1")
 
     // Testing dependencies
     set("junitJupiterVersion", "5.9.2")
@@ -62,9 +68,20 @@ extra.apply {
     set("scalaVersion", "2.13")
     set("curatorVersion", "2.9.0")
     set("connectUtilsVersion", "0.4+")
+    set("okhttp", "5.3.0")
+
+    // Test extra test dependencies
+    set("kafkaPlatformSchemaRegistry", "7.9.1")
+    set("kafkaPlatformProtobuf", "7.9.1")
+    set("testcontainers", "2.0.3")
+    set("org.json", "20250517")
+    set("libprotobuf", "3.25.8")
+    set("commons.lang3", "3.19.0")
+
 }
 
 val clickhouseDependencies: Configuration by configurations.creating
+
 
 dependencies {
     implementation("org.apache.kafka:connect-api:${project.extra["kafkaVersion"]}")
@@ -72,37 +89,29 @@ dependencies {
     implementation("com.clickhouse:clickhouse-http-client:${project.extra["clickHouseDriverVersion"]}")
     implementation("com.clickhouse:clickhouse-data:${project.extra["clickHouseDriverVersion"]}")
     implementation("com.clickhouse:client-v2:${project.extra["clickHouseDriverVersion"]}")
-    implementation("com.google.code.gson:gson:2.11.0")
-    // https://mvnrepository.com/artifact/org.apache.httpcomponents.client5/httpclient5
-    implementation("org.apache.httpcomponents.client5:httpclient5:5.4.2")
+    implementation("com.google.code.gson:gson:${project.extra["gson"]}")
+    implementation("org.apache.httpcomponents.client5:httpclient5:${project.extra["httpclient"]}")
 
     // Avoid telescoping constructors problem with the builder pattern using Lombok
-    compileOnly("org.projectlombok:lombok:1.18.34")
-    annotationProcessor("org.projectlombok:lombok:1.18.34")
+    compileOnly("org.projectlombok:lombok:1.18.38")
+    annotationProcessor("org.projectlombok:lombok:1.18.38")
 
     // To parse JSON response from ClickHouse to parse complex data types correctly
-    implementation("com.fasterxml.jackson.core:jackson-core:2.17.2")
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.18.2")
-    implementation("com.fasterxml.jackson.core:jackson-annotations:2.18.2")
-
-
-    // TODO: need to remove ???
-    implementation("org.slf4j:slf4j-reload4j:2.0.13")
-    implementation("org.junit.jupiter:junit-jupiter-api:5.11.3")
-    implementation("org.testcontainers:testcontainers:1.20.6")
-    implementation("org.testcontainers:toxiproxy:1.20.6")
+    implementation("com.fasterxml.jackson.core:jackson-core:${project.extra["jackson"]}")
+    implementation("com.fasterxml.jackson.core:jackson-databind:${project.extra["jackson"]}")
+    implementation("com.fasterxml.jackson.core:jackson-annotations:${project.extra["jackson-annotations"]}}")
 
     /*
         Will in side the Confluent Archive
      */
-    clickhouseDependencies("org.apache.httpcomponents.client5:httpclient5:5.4.2")
+    clickhouseDependencies("org.apache.httpcomponents.client5:httpclient5:${project.extra["httpclient"]}")
     clickhouseDependencies("com.clickhouse:clickhouse-client:${project.extra["clickHouseDriverVersion"]}")
     clickhouseDependencies("com.clickhouse:client-v2:${project.extra["clickHouseDriverVersion"]}")
     clickhouseDependencies("com.clickhouse:clickhouse-http-client:${project.extra["clickHouseDriverVersion"]}")
-    clickhouseDependencies("com.google.code.gson:gson:2.11.0")
-    clickhouseDependencies("com.fasterxml.jackson.core:jackson-core:2.17.2")
-    clickhouseDependencies("com.fasterxml.jackson.core:jackson-databind:2.18.2")
-    clickhouseDependencies("com.fasterxml.jackson.core:jackson-annotations:2.18.2")
+    clickhouseDependencies("com.google.code.gson:gson:${project.extra["gson"]}")
+    clickhouseDependencies("com.fasterxml.jackson.core:jackson-core:${project.extra["jackson"]}")
+    clickhouseDependencies("com.fasterxml.jackson.core:jackson-databind:${project.extra["jackson"]}")
+    clickhouseDependencies("com.fasterxml.jackson.core:jackson-annotations:${project.extra["jackson-annotations"]}}")
 
     // Unit Tests
     testImplementation(platform("org.junit:junit-bom:${project.extra["junitJupiterVersion"]}"))
@@ -113,17 +122,45 @@ dependencies {
     testImplementation("org.mockito:mockito-junit-jupiter:${project.extra["mockitoVersion"]}")
 
     // IntegrationTests
-    testImplementation("org.testcontainers:clickhouse:1.20.3")
-    testImplementation("org.testcontainers:kafka:1.20.6")
-    testImplementation("com.squareup.okhttp3:okhttp:4.12.0")
-    testImplementation("org.json:json:20240303")
-    testImplementation("org.testcontainers:toxiproxy:1.20.6")
-    testImplementation("org.apache.httpcomponents.client5:httpclient5:5.4.2")
+    testImplementation("org.testcontainers:testcontainers-clickhouse:${project.extra["testcontainers"]}")
+    testImplementation("org.testcontainers:testcontainers-kafka:${project.extra["testcontainers"]}")
+    testImplementation("com.squareup.okhttp3:okhttp:${project.extra["okhttp"]}")
+    testImplementation("org.json:json:${project.extra["org.json"]}")
+    testImplementation("org.testcontainers:testcontainers-toxiproxy:${project.extra["testcontainers"]}")
+    testImplementation("org.apache.httpcomponents.client5:httpclient5:5.5")
     testImplementation("com.clickhouse:clickhouse-jdbc:${project.extra["clickHouseDriverVersion"]}:all")
     testImplementation("com.clickhouse:clickhouse-client:${project.extra["clickHouseDriverVersion"]}")
     testImplementation("com.clickhouse:client-v2:${project.extra["clickHouseDriverVersion"]}")
     testImplementation("com.clickhouse:clickhouse-http-client:${project.extra["clickHouseDriverVersion"]}")
+    testImplementation("org.slf4j:slf4j-simple:2.0.17")
 
+//    // Schema Registry client for testing
+    testImplementation("io.confluent:kafka-schema-registry-client:${project.extra["kafkaPlatformSchemaRegistry"]}")
+    testImplementation("io.confluent:kafka-schema-registry:${project.extra["kafkaPlatformSchemaRegistry"]}")
+    testImplementation("io.confluent:kafka-schema-serializer:${project.extra["kafkaPlatformSchemaRegistry"]}")
+
+    // Test Fixtures Dependencies
+    // Test Fixtures is used to extract helpers into a separate jar and publish locally to use in other test projects
+    // like JMH Benchmark
+    // Protobuf dependencies
+    testFixturesApi("com.google.protobuf:protobuf-java:${project.extra["libprotobuf"]}")
+    testFixturesApi("io.confluent:kafka-protobuf-serializer:${project.extra["kafkaPlatformProtobuf"]}")
+    testFixturesApi("io.confluent:kafka-connect-protobuf-converter:${project.extra["kafkaPlatformProtobuf"]}")
+    testFixturesApi("io.confluent:kafka-connect-avro-converter:7.9.1")
+    testFixturesApi("io.confluent:kafka-avro-serializer:7.9.1")
+
+    testFixturesImplementation(platform("org.junit:junit-bom:${project.extra["junitJupiterVersion"]}"))
+    testFixturesImplementation("org.junit.jupiter:junit-jupiter")
+    testFixturesImplementation("org.junit.platform:junit-platform-runner")
+    testFixturesImplementation("org.apache.kafka:connect-api:${project.extra["kafkaVersion"]}")
+    testFixturesImplementation("org.apache.commons:commons-lang3:${project.extra["commons.lang3"]}")
+    testFixturesImplementation("com.clickhouse:clickhouse-client:${project.extra["clickHouseDriverVersion"]}")
+    testFixturesImplementation("com.clickhouse:clickhouse-http-client:${project.extra["clickHouseDriverVersion"]}")
+    testFixturesImplementation("com.clickhouse:clickhouse-data:${project.extra["clickHouseDriverVersion"]}")
+    testFixturesImplementation("com.clickhouse:client-v2:${project.extra["clickHouseDriverVersion"]}")
+    testFixturesImplementation("com.google.code.gson:gson:${project.extra["gson"]}")
+    testFixturesImplementation("org.json:json:${project.extra["org.json"]}")
+    testFixturesImplementation("org.testcontainers:testcontainers:${project.extra["testcontainers"]}")
 }
 
 
@@ -148,9 +185,13 @@ tasks.withType<JavaCompile> {
 }
 
 tasks.withType<Test> {
-    maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).takeIf { it > 0 } ?: 1
+    if (System.getenv("CLICKHOUSE_CLUSTER_MODE") == "true") {
+        maxParallelForks = 1
+    } else {
+        maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).takeIf { it > 0 } ?: 1
+    }
     tasks.getByName("check").dependsOn(this)
-    systemProperty("file.encoding", "windows-1252") // run tests with different encoding
+//    systemProperty("file.encoding", "windows-1252") // run tests with different encoding
     useJUnitPlatform()
     testLogging {
         events("passed", "skipped", "failed")
@@ -254,4 +295,59 @@ tasks.register<Zip>("createConfluentArchive") {
     archiveAppendix.set(archiveFilename)
     archiveVersion.set(project.version.toString())
     destinationDirectory.set(file("$buildDir/confluent"))
+}
+
+var generateVersionFile = tasks.register<DefaultTask>("generateVersionFile") {
+    val outputDir = "generated/sources/version/java/main/com/clickhouse/kafka/connect/sink/";
+    outputs.dir(layout.buildDirectory.dir(outputDir))
+    doFirst {
+        val outputDir = layout.buildDirectory.dir(outputDir).get().asFile
+        outputDir.mkdirs() // Ensure the directory exists
+
+        val outputFile = File(outputDir, "Version.java")
+        val versionContent = """
+package com.clickhouse.kafka.connect.sink;
+
+public final class Version {
+    public static final String ARTIFACT_VERSION = "${project.version}";
+
+    private Version() {
+        // Prevent instantiation
+    }
+}
+""".trimIndent()
+
+        outputFile.writeText(versionContent)
+    }
+}
+tasks.getByName("compileJava").dependsOn("generateVersionFile")
+
+sourceSets {
+    main {
+        java {
+            srcDir(generateVersionFile)
+        }
+    }
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:${project.extra["libprotobuf"]}"
+    }
+//    generatedFilesBaseDir = "$buildDir/generated/source/proto"
+}
+
+task("testJar", type = Jar::class) {
+    archiveClassifier.set("test")
+    from(sourceSets.testFixtures.get().allSource)
+}
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            from(components["java"]) // Publishes the Java component
+        }
+        create<MavenPublication>("mavenTestJar") {
+            artifact(tasks["testJar"])
+        }
+    }
 }
