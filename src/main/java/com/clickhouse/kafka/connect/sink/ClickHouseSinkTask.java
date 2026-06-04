@@ -2,6 +2,7 @@ package com.clickhouse.kafka.connect.sink;
 
 import com.clickhouse.kafka.connect.sink.dlq.ErrorReporter;
 import com.clickhouse.kafka.connect.util.Utils;
+import com.clickhouse.kafka.connect.Version;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.errors.ConnectException;
@@ -35,7 +36,7 @@ public class ClickHouseSinkTask extends SinkTask {
 
     @Override
     public String version() {
-        return "0.0.1";
+        return Version.getVersion();
     }
 
     @Override

@@ -235,6 +235,16 @@ tasks.withType<Test> {
     })
 }
 
+// Substitute ${project.version} in version.properties at build time so
+// Version.getVersion() (read by ClickHouseSinkConnector.version() and
+// ClickHouseSinkTask.version()) returns the actual version string.
+// Mirrors Maven's <filtering>true</filtering> behavior on src/main/resources.
+tasks.processResources {
+    filesMatching("clickhouse-kafka-connect-version.properties") {
+        expand("project" to project)
+    }
+}
+
 /*
  * ShadowJar
  */
