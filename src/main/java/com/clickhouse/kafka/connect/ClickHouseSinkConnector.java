@@ -2,7 +2,7 @@ package com.clickhouse.kafka.connect;
 
 import com.clickhouse.kafka.connect.sink.ClickHouseSinkConfig;
 import com.clickhouse.kafka.connect.sink.ClickHouseSinkTask;
-import com.clickhouse.kafka.connect.Version;
+import com.clickhouse.kafka.connect.sink.Version;
 import org.apache.kafka.common.config.Config;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.connect.connector.Task;
@@ -88,7 +88,7 @@ public class ClickHouseSinkConnector extends SinkConnector {
 
     @Override
     public String version() {
-        return Version.getVersion();
+        return Version.ARTIFACT_VERSION;
     }
 
     @Override
