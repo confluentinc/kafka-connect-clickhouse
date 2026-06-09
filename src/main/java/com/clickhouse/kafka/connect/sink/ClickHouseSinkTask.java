@@ -35,7 +35,7 @@ public class ClickHouseSinkTask extends SinkTask {
 
     @Override
     public String version() {
-        return "0.0.1";
+        return Version.ARTIFACT_VERSION;
     }
 
     @Override

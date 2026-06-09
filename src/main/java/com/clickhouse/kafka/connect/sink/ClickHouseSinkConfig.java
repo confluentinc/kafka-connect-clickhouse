@@ -230,6 +230,7 @@ public class ClickHouseSinkConfig {
 
         topicToTableMap = new HashMap<>();
         String topicToTableMapString = props.getOrDefault(TABLE_MAPPING, "").trim();
+        LOGGER.info("Topic to Table Map String: {}", topicToTableMapString);
         if (!topicToTableMapString.isBlank()) {
             String [] stringSplit = topicToTableMapString.split(",");
             for (String topicToTable: stringSplit) {

@@ -66,6 +66,10 @@ public class ClickHouseHelperClient implements AutoCloseable {
     private final String sslSocketSni;
 
     public ClickHouseHelperClient(ClickHouseClientBuilder builder) {
+        LOGGER.debug("Creating ClickHouseHelperClient with config: hostname={}, port={}, username={}, database={}, sslEnabled={}, jdbcConnectionProperties={}, timeout={}, retry={}, proxyType={}, proxyHost={}, proxyPort={}, useClientV2={}",
+                builder.hostname, builder.port, builder.username, builder.database, builder.sslEnabled,
+                builder.jdbcConnectionProperties, builder.timeout, builder.retry, builder.proxyType,
+                builder.proxyHost, builder.proxyPort, builder.useClientV2);
         this.hostname = builder.hostname;
         this.port = builder.port;
         this.username = builder.username;
@@ -116,7 +120,8 @@ public class ClickHouseHelperClient implements AutoCloseable {
                 tmpJdbcConnectionProperties
         );
 
-        LOGGER.info("ClickHouse URL: {}", url);
+        LOGGER.debug("createClientV1: url={}, hostname={}, port={}, database={}, sslEnabled={}, jdbcConnectionProperties={}",
+                url, hostname, port, database, sslEnabled, tmpJdbcConnectionProperties);
 
         final Map<String, String> options = new HashMap<>();
         if (username != null && password != null) {
@@ -150,8 +155,8 @@ public class ClickHouseHelperClient implements AutoCloseable {
                 tmpJdbcConnectionProperties
         );
 
-        LOGGER.info("ClickHouse URL: {}", url);
-
+        LOGGER.debug("createClientV2: url={}, hostname={}, port={}, database={}, sslEnabled={}, jdbcConnectionProperties={}",
+                url, hostname, port, database, sslEnabled, tmpJdbcConnectionProperties);
 
         Client.Builder clientBuilder = new Client.Builder()
                 .addEndpoint(url)
@@ -292,7 +297,7 @@ public class ClickHouseHelperClient implements AutoCloseable {
         int retryCount = 0;
         Exception ce = null;
         while (retryCount < retry) {
-            System.out.println("query " + query + " retry " + retryCount + " out of " + retry);
+            LOGGER.debug("queryV2: query={}, retry={} out of {}", query, retryCount, retry);
             CompletableFuture<Records> futureRecords = client.queryRecords(query, settings);
             try {
                 Records records = futureRecords.get();
@@ -465,7 +470,7 @@ public class ClickHouseHelperClient implements AutoCloseable {
                 }
             }
         } catch (Exception e) {
-            LOGGER.error("describeTableV2 failed", e);
+            LOGGER.error("Exception in describeTableV2 for table {}.{}", database, tableName, e);
             return null;
         }
         return table;
@@ -571,7 +576,6 @@ public class ClickHouseHelperClient implements AutoCloseable {
             this.proxyHost = proxyHost;
             this.proxyPort = proxyPort;
         }
-
 
         public ClickHouseClientBuilder setUsername(String username) {
             this.username = username;

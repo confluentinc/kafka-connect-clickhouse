@@ -39,7 +39,7 @@ plugins {
 }
 
 group = "com.clickhouse.kafka"
-version = file("VERSION").readText().trim()
+version = file("VERSION").readText().trim().removePrefix("v")
 description = "The official ClickHouse Apache Kafka Connect Connector."
 
 repositories {
