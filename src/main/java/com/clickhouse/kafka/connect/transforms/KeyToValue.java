@@ -133,7 +133,6 @@ public class KeyToValue<R extends ConnectRecord<R>> implements Transformation<R>
                 newValue.put(f, oldValue.get(f));
             }
         });
-        LOGGER.debug("New schema value: {}", newValue);
         return record.newRecord(record.topic(), record.kafkaPartition(), record.keySchema(), record.key(), newValueSchema, newValue, record.timestamp());
     }
 
