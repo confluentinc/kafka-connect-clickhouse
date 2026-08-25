@@ -455,7 +455,10 @@ public class ClickHouseWriter implements DBWriter {
                             BinaryStreamUtils.writeInt64(stream, seconds);
                         }
                     } catch (Exception e) {
-                        LOGGER.error("Error parsing DateTime64 value for column: {}, fieldType: {}, exception: {}", columnName, value.getFieldType(), e.getMessage());
+                        // Do not log e.getMessage(): DateTimeParseException quotes the record's
+                        // datetime field value ("Text '<value>' could not be parsed"), which is
+                        // customer data. Log the exception class only.
+                        LOGGER.error("Error parsing DateTime64 value for column: {}, fieldType: {}, exception: {}", columnName, value.getFieldType(), e.getClass().getName());
                         unsupported = true;
                     }
                 } else {
@@ -636,7 +639,11 @@ public class ClickHouseWriter implements DBWriter {
                     LOGGER.error("Cannot serialize unsupported type {}", columnType);
             }
         } catch (Exception e) {
-            LOGGER.error("Error writing value of " + (value == null ? "<value null>" : value.getFieldType() ) + " to the column `" + col.getName() + "` of type " + columnType, e);
+            // Do not log the exception object: value-conversion exceptions (e.g. UUID.fromString,
+            // Long.parseLong, Column.convertEnumValues) quote the record field value in their
+            // message, which is customer data. The field type, column name and column type below
+            // are structural metadata. The exception is still rethrown for the framework/DLQ.
+            LOGGER.error("Error writing value of " + (value == null ? "<value null>" : value.getFieldType() ) + " to the column `" + col.getName() + "` of type " + columnType);
             throw e;
         }
     }
@@ -938,7 +945,10 @@ public class ClickHouseWriter implements DBWriter {
                 Table tableTmp = urgentTableUpdate(table);
                 doInsertRawBinary(records, tableTmp, queryId, tableTmp.hasDefaults(), false);
             } else {
-                LOGGER.error("Error inserting records", e);
+                // Do not log the raw insert exception: a data-level rejection can quote the
+                // offending row value in the driver message, which is customer data. Log the
+                // ClickHouse error code and exception class only; the exception is still rethrown.
+                LOGGER.error("Error inserting records. ClickHouse error code: {}, exception: {}", e.getCode(), e.getClass().getName());
                 throw e;
             }
         } catch (Exception e) {
@@ -949,7 +959,10 @@ public class ClickHouseWriter implements DBWriter {
                 Table tableTmp = urgentTableUpdate(table);
                 doInsertRawBinary(records, tableTmp, queryId, tableTmp.hasDefaults(), false);
             } else {
-                LOGGER.error("Error inserting records", e);
+                // Do not log the raw insert exception: a data-level rejection can quote the
+                // offending row value in the driver message, which is customer data. Log the
+                // exception class only; the exception is still rethrown.
+                LOGGER.error("Error inserting records, exception: {}", e.getClass().getName());
                 throw e;
             }
         }

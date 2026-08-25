@@ -520,7 +520,8 @@ public class Column {
         if ( this.enumValues != null ) {
             return enumValues.get(value);
         }
-        throw new RuntimeException(String.format("No content in enum %s", value));
+        // Do not include the value: it is the record's enum field value (customer data).
+        throw new RuntimeException("No matching entry in enum for the provided value");
     }
 
     public String toString() {
