@@ -641,9 +641,11 @@ public class ClickHouseWriter implements DBWriter {
         } catch (Exception e) {
             // Do not log the exception object: value-conversion exceptions (e.g. UUID.fromString,
             // Long.parseLong, Column.convertEnumValues) quote the record field value in their
-            // message, which is customer data. The field type, column name and column type below
-            // are structural metadata. The exception is still rethrown for the framework/DLQ.
-            LOGGER.error("Error writing value of " + (value == null ? "<value null>" : value.getFieldType() ) + " to the column `" + col.getName() + "` of type " + columnType);
+            // message, which is customer data. The field type, column name, column type and the
+            // exception class below are structural metadata (no e.getMessage()). The exception is
+            // still rethrown for the framework/DLQ.
+            LOGGER.error("Error writing value of {} to the column `{}` of type {}, exception: {}",
+                    value == null ? "<value null>" : value.getFieldType(), col.getName(), columnType, e.getClass().getName());
             throw e;
         }
     }
@@ -953,8 +955,10 @@ public class ClickHouseWriter implements DBWriter {
             }
         } catch (Exception e) {
             // Note: this part will be removed once V1 is deprecated
-            Optional<String> updateTableException = UPDATE_TABLE_EXCEPTION_STR_TO_ERROR_CODE.keySet().stream().filter(code -> e.getMessage().contains(code)).findFirst();
-            if (e.getMessage() != null && updateTableException.isPresent() && retry) {
+            String exceptionMessage = e.getMessage();
+            Optional<String> updateTableException = exceptionMessage == null ? Optional.empty()
+                    : UPDATE_TABLE_EXCEPTION_STR_TO_ERROR_CODE.keySet().stream().filter(exceptionMessage::contains).findFirst();
+            if (updateTableException.isPresent() && retry) {
                 LOGGER.warn("Error code {}. Trying to update table mapping because ClickHouse table schema may have evolved.", UPDATE_TABLE_EXCEPTION_STR_TO_ERROR_CODE.get(updateTableException.get()));
                 Table tableTmp = urgentTableUpdate(table);
                 doInsertRawBinary(records, tableTmp, queryId, tableTmp.hasDefaults(), false);
