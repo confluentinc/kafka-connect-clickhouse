@@ -2,6 +2,7 @@ package com.clickhouse.kafka.connect.sink.db;
 
 import com.clickhouse.client.ClickHouseClient;
 import com.clickhouse.client.ClickHouseConfig;
+import com.clickhouse.client.ClickHouseException;
 import com.clickhouse.client.ClickHouseNode;
 import com.clickhouse.client.ClickHouseNodeSelector;
 import com.clickhouse.client.ClickHouseProtocol;
@@ -964,9 +965,18 @@ public class ClickHouseWriter implements DBWriter {
                 doInsertRawBinary(records, tableTmp, queryId, tableTmp.hasDefaults(), false);
             } else {
                 // Do not log the raw insert exception: a data-level rejection can quote the
-                // offending row value in the driver message, which is customer data. Log the
-                // exception class only; the exception is still rethrown.
-                LOGGER.error("Error inserting records, exception: {}", e.getClass().getName());
+                // offending row value in the driver message, which is customer data. The async
+                // driver wraps failures in ExecutionException, so drill to the ClickHouseException
+                // in the cause chain and log its numeric error code (structural metadata that
+                // support relies on to triage insert failures) plus the exception class only,
+                // never the free-form message. The exception is still rethrown for the DLQ.
+                Exception rootCause = Utils.getRootCause(e, true);
+                if (rootCause instanceof ClickHouseException) {
+                    LOGGER.error("Error inserting records. ClickHouse error code: {}, exception: {}",
+                            ((ClickHouseException) rootCause).getErrorCode(), e.getClass().getName());
+                } else {
+                    LOGGER.error("Error inserting records, exception: {}", e.getClass().getName());
+                }
                 throw e;
             }
         }

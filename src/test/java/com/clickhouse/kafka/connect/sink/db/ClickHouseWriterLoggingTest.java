@@ -1,5 +1,6 @@
 package com.clickhouse.kafka.connect.sink.db;
 
+import com.clickhouse.client.ClickHouseException;
 import com.clickhouse.kafka.connect.sink.ClickHouseSinkConfig;
 import com.clickhouse.kafka.connect.sink.data.Data;
 import com.clickhouse.kafka.connect.sink.data.Record;
@@ -19,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -133,6 +135,40 @@ public class ClickHouseWriterLoggingTest {
 
         assertTrue(stderr.contains("Error inserting records"),
                 "positive control: the insert-error log should have fired. Captured: " + stderr);
+        assertFalse(stderr.contains(canary),
+                "raw insert exception (with row value) leaked into the ERROR log: " + stderr);
+    }
+
+    // F3 - ClickHouseWriter.java:952 (generic branch): real insert failures arrive async as an
+    // ExecutionException wrapping a ClickHouseException. The numeric ClickHouse error code is
+    // structural (support triages on it) and must survive, while the driver's free-form message
+    // (which can quote the offending row value) must not reach the log.
+    @Test
+    public void insertError_keepsClickHouseErrorCode_withoutValue() throws Exception {
+        ClickHouseWriter writer = spy(new ClickHouseWriter(new SinkTaskStatistics(0)));
+        ClickHouseHelperClient chc = mock(ClickHouseHelperClient.class);
+        when(chc.isUseClientV2()).thenReturn(true);
+        setField(writer, "chc", chc);
+
+        String canary = "CANARY_NULL_ROW_secret_payload_value";
+        List<Record> records = new ArrayList<>();
+        Table table = mock(Table.class);
+        QueryIdentifier queryId = new QueryIdentifier("topic", "query-id");
+
+        // A ClickHouseException carrying error code 349 and a message that quotes the offending
+        // row, wrapped in an ExecutionException the way the async driver surfaces insert failures.
+        ClickHouseException chException = mock(ClickHouseException.class);
+        when(chException.getErrorCode()).thenReturn(349);
+        when(chException.getMessage())
+                .thenReturn("Code: 349. DB::Exception: Cannot convert NULL value near '" + canary + "'");
+        doThrow(new ExecutionException("insert failed", chException))
+                .when(writer).doInsertRawBinaryV2(records, table, queryId, false);
+
+        String stderr = captureStderr(() ->
+                writer.doInsertRawBinary(records, table, queryId, false, false));
+
+        assertTrue(stderr.contains("ClickHouse error code: 349"),
+                "the ClickHouse error code should be preserved for triage. Captured: " + stderr);
         assertFalse(stderr.contains(canary),
                 "raw insert exception (with row value) leaked into the ERROR log: " + stderr);
     }
