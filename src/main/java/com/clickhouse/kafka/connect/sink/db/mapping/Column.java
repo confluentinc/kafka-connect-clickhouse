@@ -520,7 +520,9 @@ public class Column {
         if ( this.enumValues != null ) {
             return enumValues.get(value);
         }
-        throw new RuntimeException(String.format("No content in enum %s", value));
+        // Reaching here means enumValues was never initialized, i.e. this column is not an Enum
+        // column. Do not include the value: it is the record's field value (customer data).
+        throw new RuntimeException("Cannot convert value for column `" + name + "`: no enum mapping is defined for this column");
     }
 
     public String toString() {

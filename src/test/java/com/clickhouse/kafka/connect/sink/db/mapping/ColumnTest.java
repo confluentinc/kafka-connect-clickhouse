@@ -353,5 +353,19 @@ class ColumnTest {
         assertEquals("Variant(String, Bool)", result);
         assertFalse(result.startsWith("Nullable("));
     }
+
+    // Sensitive-log audit (ClickHouseWriter.java:639 origin): convertEnumValues must not embed the
+    // record's enum field value in the exception message, since it is logged upstream. Here the
+    // column is a non-enum ("String") column, so enumValues is never initialized and the throw
+    // path is exercised.
+    @Test
+    public void convertEnumValues_nonEnumColumn_doesNotEmbedValue() {
+        Column col = Column.extractColumn(newDescriptor("String"));
+        String canary = "CANARY_ENUM_FIELD_VALUE";
+        RuntimeException ex =
+                assertThrows(RuntimeException.class, () -> col.convertEnumValues(canary));
+        assertFalse(ex.getMessage().contains(canary),
+                "enum field value leaked into exception message: " + ex.getMessage());
+    }
 }
 

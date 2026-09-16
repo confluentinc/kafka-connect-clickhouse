@@ -2,6 +2,7 @@ package com.clickhouse.kafka.connect.sink.db;
 
 import com.clickhouse.client.ClickHouseClient;
 import com.clickhouse.client.ClickHouseConfig;
+import com.clickhouse.client.ClickHouseException;
 import com.clickhouse.client.ClickHouseNode;
 import com.clickhouse.client.ClickHouseNodeSelector;
 import com.clickhouse.client.ClickHouseProtocol;
@@ -455,7 +456,10 @@ public class ClickHouseWriter implements DBWriter {
                             BinaryStreamUtils.writeInt64(stream, seconds);
                         }
                     } catch (Exception e) {
-                        LOGGER.error("Error parsing DateTime64 value for column: {}, fieldType: {}, exception: {}", columnName, value.getFieldType(), e.getMessage());
+                        // Do not log e.getMessage(): DateTimeParseException quotes the record's
+                        // datetime field value ("Text '<value>' could not be parsed"), which is
+                        // customer data. Log the exception class only.
+                        LOGGER.error("Error parsing DateTime64 value for column: {}, fieldType: {}, exception: {}", columnName, value.getFieldType(), e.getClass().getName());
                         unsupported = true;
                     }
                 } else {
@@ -636,7 +640,13 @@ public class ClickHouseWriter implements DBWriter {
                     LOGGER.error("Cannot serialize unsupported type {}", columnType);
             }
         } catch (Exception e) {
-            LOGGER.error("Error writing value of " + (value == null ? "<value null>" : value.getFieldType() ) + " to the column `" + col.getName() + "` of type " + columnType, e);
+            // Do not log the exception object: value-conversion exceptions (e.g. UUID.fromString,
+            // Long.parseLong, Column.convertEnumValues) quote the record field value in their
+            // message, which is customer data. The field type, column name, column type and the
+            // exception class below are structural metadata (no e.getMessage()). The exception is
+            // still rethrown for the framework/DLQ.
+            LOGGER.error("Error writing value of {} to the column `{}` of type {}, exception: {}",
+                    value == null ? "<value null>" : value.getFieldType(), col.getName(), columnType, e.getClass().getName());
             throw e;
         }
     }
@@ -938,18 +948,35 @@ public class ClickHouseWriter implements DBWriter {
                 Table tableTmp = urgentTableUpdate(table);
                 doInsertRawBinary(records, tableTmp, queryId, tableTmp.hasDefaults(), false);
             } else {
-                LOGGER.error("Error inserting records", e);
+                // Do not log the raw insert exception: a data-level rejection can quote the
+                // offending row value in the driver message, which is customer data. Log the
+                // ClickHouse error code and exception class only; the exception is still rethrown.
+                LOGGER.error("Error inserting records. ClickHouse error code: {}, exception: {}", e.getCode(), e.getClass().getName());
                 throw e;
             }
         } catch (Exception e) {
             // Note: this part will be removed once V1 is deprecated
-            Optional<String> updateTableException = UPDATE_TABLE_EXCEPTION_STR_TO_ERROR_CODE.keySet().stream().filter(code -> e.getMessage().contains(code)).findFirst();
-            if (e.getMessage() != null && updateTableException.isPresent() && retry) {
+            String exceptionMessage = e.getMessage();
+            Optional<String> updateTableException = exceptionMessage == null ? Optional.empty()
+                    : UPDATE_TABLE_EXCEPTION_STR_TO_ERROR_CODE.keySet().stream().filter(exceptionMessage::contains).findFirst();
+            if (updateTableException.isPresent() && retry) {
                 LOGGER.warn("Error code {}. Trying to update table mapping because ClickHouse table schema may have evolved.", UPDATE_TABLE_EXCEPTION_STR_TO_ERROR_CODE.get(updateTableException.get()));
                 Table tableTmp = urgentTableUpdate(table);
                 doInsertRawBinary(records, tableTmp, queryId, tableTmp.hasDefaults(), false);
             } else {
-                LOGGER.error("Error inserting records", e);
+                // Do not log the raw insert exception: a data-level rejection can quote the
+                // offending row value in the driver message, which is customer data. The async
+                // driver wraps failures in ExecutionException, so drill to the ClickHouseException
+                // in the cause chain and log its numeric error code (structural metadata that
+                // support relies on to triage insert failures) plus the exception class only,
+                // never the free-form message. The exception is still rethrown for the DLQ.
+                Exception rootCause = Utils.getRootCause(e, true);
+                if (rootCause instanceof ClickHouseException) {
+                    LOGGER.error("Error inserting records. ClickHouse error code: {}, exception: {}",
+                            ((ClickHouseException) rootCause).getErrorCode(), e.getClass().getName());
+                } else {
+                    LOGGER.error("Error inserting records, exception: {}", e.getClass().getName());
+                }
                 throw e;
             }
         }
