@@ -181,6 +181,127 @@ public class ClickHouseSinkTaskWithSchemaTest extends ClickHouseBase {
     }
 
     @Test
+    // https://github.com/ClickHouse/clickhouse-kafka-connect/issues/820
+    public void nullMapTypeTest() {
+        Map<String, String> props = getBaseProps();
+        ClickHouseHelperClient chc = ClickHouseTestHelpers.createClient(props);
+
+        String topic = createTopicName("nullable_map_table_test");
+        ClickHouseTestHelpers.dropTable(chc, topic);
+        new CreateTableStatement()
+                .tableName(topic)
+                .column("off16", "Int16")
+                .column("map_string_string", "Map(String, String)")
+                .column("map_string_int64", "Map(String, Int64)")
+                .engine("MergeTree")
+                .orderByColumn("off16")
+                .execute(chc);
+        Collection<SinkRecord> sr = SchemaTestData.createNullableMapType(topic, 1);
+
+        ClickHouseSinkTask chst = new ClickHouseSinkTask();
+        chst.start(props);
+        chst.put(sr);
+        chst.stop();
+
+        assertEquals(sr.size(), ClickHouseTestHelpers.countRows(chc, topic));
+        assertEquals(expectedNullMapCount(sr.size()), countEmptyMaps(chc, topic));
+    }
+
+    @Test
+    public void nullMapTypeJsonInsertTest() {
+        Map<String, String> props = getBaseProps();
+        props.put("bypassRowBinary", "true");
+        ClickHouseHelperClient chc = ClickHouseTestHelpers.createClient(props);
+
+        String topic = createTopicName("nullable_map_json_table_test");
+        ClickHouseTestHelpers.dropTable(chc, topic);
+        new CreateTableStatement()
+                .tableName(topic)
+                .column("off16", "Int16")
+                .column("map_string_string", "Map(String, String)")
+                .column("map_string_int64", "Map(String, Int64)")
+                .engine("MergeTree")
+                .orderByColumn("off16")
+                .execute(chc);
+        Collection<SinkRecord> sr = SchemaTestData.createNullableMapType(topic, 1);
+
+        ClickHouseSinkTask chst = new ClickHouseSinkTask();
+        chst.start(props);
+        chst.put(sr);
+        chst.stop();
+
+        assertEquals(sr.size(), ClickHouseTestHelpers.countRows(chc, topic));
+        assertEquals(expectedNullMapCount(sr.size()), countEmptyMaps(chc, topic));
+    }
+
+    @Test
+    public void nestedNullMapInStructTest() {
+        Map<String, String> props = getBaseProps();
+        ClickHouseHelperClient chc = ClickHouseTestHelpers.createClient(props);
+        String topic = createTopicName("nested_nullable_map_table_test");
+        ClickHouseTestHelpers.dropTable(chc, topic);
+        new CreateTableStatement()
+                .tableName(topic)
+                .column("off16", "Int16")
+                .column("t", "Tuple(`id` Int32, `m` Map(String, String))")
+                .engine("MergeTree")
+                .orderByColumn("off16")
+                .execute(chc);
+
+        Schema innerSchema = SchemaBuilder.struct()
+                .field("id", Schema.INT32_SCHEMA)
+                .field("m", SchemaBuilder.map(Schema.STRING_SCHEMA, Schema.STRING_SCHEMA).optional().build())
+                .build();
+        Schema valueSchema = SchemaBuilder.struct()
+                .field("off16", Schema.INT16_SCHEMA)
+                .field("t", innerSchema)
+                .build();
+
+        int total = 1000;
+        List<SinkRecord> sr = new ArrayList<>();
+        for (int n = 0; n < total; n++) {
+            Struct inner = new Struct(innerSchema)
+                    .put("id", n)
+                    .put("m", n % 10 == 0 ? null : Map.of("k1", "v1"));
+            Struct value = new Struct(valueSchema).put("off16", (short) n).put("t", inner);
+            sr.add(new SinkRecord(topic, 1, null, null, valueSchema, value, n,
+                    System.currentTimeMillis(), TimestampType.CREATE_TIME));
+        }
+
+        ClickHouseSinkTask chst = new ClickHouseSinkTask();
+        chst.start(props);
+        chst.put(sr);
+        chst.stop();
+
+        assertEquals(total, ClickHouseTestHelpers.countRows(chc, topic));
+        String table = "`" + topic + "`";
+        String q = "SELECT countIf(empty(tupleElement(t, 'm'))), countIf(tupleElement(t, 'm')['k1'] = 'v1'), countIf(tupleElement(t, 'id') = off16) FROM "
+                + table + " SETTINGS select_sequential_consistency = 1";
+        try (Records records = chc.queryV2(q)) {
+            com.clickhouse.client.api.query.GenericRecord r = records.iterator().next();
+            assertEquals(total / 10, Integer.parseInt(r.getString(1)), "null nested maps should be empty");
+            assertEquals(total - total / 10, Integer.parseInt(r.getString(2)), "non-null nested maps should keep data");
+            assertEquals(total, Integer.parseInt(r.getString(3)), "sibling tuple field must not be shifted/corrupted");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static int expectedNullMapCount(int totalRecords) {
+        return (totalRecords + 9) / 10;
+    }
+
+    private static int countEmptyMaps(ClickHouseHelperClient chc, String tableName) {
+        String table = "`" + tableName + "`";
+        String query = "SELECT count() FROM " + table + " WHERE empty(map_string_string) AND empty(map_string_int64) SETTINGS select_sequential_consistency = 1";
+        try (com.clickhouse.client.api.query.Records records = chc.queryV2(query)) {
+            return Integer.parseInt(records.iterator().next().getString(1));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
     public void nullArrayTypeTest() {
         Map<String, String> props = getBaseProps();
         ClickHouseHelperClient chc = ClickHouseTestHelpers.createClient(props);

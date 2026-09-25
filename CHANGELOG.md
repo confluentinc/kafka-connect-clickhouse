@@ -1,6 +1,7 @@
 # 1.3.9, 2026-05-21
 
 ## Bug Fixes
+* Backported from upstream: fixed NPE on null optional Map fields (top-level or nested in a struct); they are written as empty ClickHouse maps. (https://github.com/ClickHouse/clickhouse-kafka-connect/issues/820, https://github.com/ClickHouse/clickhouse-kafka-connect/pull/836)
 * To gracefully handle live schema drift between the connector and ClickHouse, refresh the table mappings when connector encounters `Code: 131. DB::Exception: Too large string size` and log column-level schema updates. Now, the connector refreshes its table mappings automatically when ClickHouse returns either `Code: 33` or `Code: 131` and retries the insert. (https://github.com/ClickHouse/clickhouse-kafka-connect/issues/751)
 
 # 1.3.8, 2026-05-08
